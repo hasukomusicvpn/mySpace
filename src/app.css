@@ -1,0 +1,10 @@
+@config "../tailwind.config.js";
+@import "tailwindcss";
+
+/* Global body background */
+body {
+@apply bg-galaxy-bg;
+min-width: 100vw;
+min-height: 100vh
+}
+
