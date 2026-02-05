@@ -3,55 +3,69 @@
   import { supabase } from '$lib/supabaseClient'
 
   type MoodKey = 'happy' | 'good' | 'neutral' | 'bad' | 'sad'
-  type MoodRow = { mood: MoodKey; created_at: string }
 
-  const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
+  type DayMood = {
+    label: string
+    dateKey: string
+    mood: MoodKey | null
+  }
 
   const MOODS: Record<MoodKey, { emoji: string; bg: string }> = {
     happy: { emoji: '😄', bg: 'bg-yellow-300' },
     good: { emoji: '🙂', bg: 'bg-green-300' },
-    neutral: { emoji: '😐', bg: 'bg-gray-200' },
+    neutral: { emoji: '😐', bg: 'bg-gray-300' },
     bad: { emoji: '😕', bg: 'bg-orange-300' },
     sad: { emoji: '😢', bg: 'bg-red-300' }
   }
 
-  type DayMood = { day: (typeof WEEK_DAYS)[number]; mood: MoodKey | null; dateKey: string }
+  function normalizeMood(input: unknown): MoodKey | null {
+    if (typeof input !== 'string') return null
+    const s = input.trim().toLowerCase()
+
+    // If you stored "😐 Neutral" etc, this still works:
+    if (s.includes('happy')) return 'happy'
+    if (s.includes('good')) return 'good'
+    if (s.includes('neutral')) return 'neutral'
+    if (s.includes('bad')) return 'bad'
+    if (s.includes('sad')) return 'sad'
+
+    // If you stored just the emoji:
+    if (s.includes('😄')) return 'happy'
+    if (s.includes('🙂')) return 'good'
+    if (s.includes('😐')) return 'neutral'
+    if (s.includes('😕')) return 'bad'
+    if (s.includes('😢')) return 'sad'
+
+    return null
+  }
 
   let loading = true
   let errorMsg = ''
   let week: DayMood[] = []
 
-  function toISODateKey(d: Date) {
-    // local date key: YYYY-MM-DD
+  function localDateKey(date: Date | string) {
+    const d = new Date(date)
     const yyyy = d.getFullYear()
     const mm = String(d.getMonth() + 1).padStart(2, '0')
     const dd = String(d.getDate()).padStart(2, '0')
     return `${yyyy}-${mm}-${dd}`
   }
 
-  function startOfWeekMonday(date = new Date()) {
-    const d = new Date(date)
-    const day = d.getDay() // Sun=0..Sat=6
-    const diff = day === 0 ? -6 : 1 - day // shift to Monday
-    d.setDate(d.getDate() + diff)
-    d.setHours(0, 0, 0, 0)
-    return d
-  }
+  function buildWeek(): DayMood[] {
+    const today = new Date()
+    const day = today.getDay() || 7 // Sunday=7
+    const monday = new Date(today)
+    monday.setDate(today.getDate() - (day - 1))
+    monday.setHours(0, 0, 0, 0)
 
-  function endOfWeekSunday(date = new Date()) {
-    const start = startOfWeekMonday(date)
-    const end = new Date(start)
-    end.setDate(start.getDate() + 6)
-    end.setHours(23, 59, 59, 999)
-    return end
-  }
-
-  function buildWeek(date = new Date()) {
-    const start = startOfWeekMonday(date)
-    return WEEK_DAYS.map((label, i) => {
-      const d = new Date(start)
-      d.setDate(start.getDate() + i)
-      return { day: label, mood: null, dateKey: toISODateKey(d) } as DayMood
+    return Array.from({ length: 7 }).map((_, i) => {
+      const d = new Date(monday)
+      d.setDate(monday.getDate() + i)
+      return {
+        label: d.toLocaleDateString(undefined, { weekday: 'short' }),
+        dateKey: localDateKey(d),
+        mood: null
+      }
     })
   }
 
@@ -61,21 +75,15 @@
     week = buildWeek()
 
     const { data: userRes, error: userErr } = await supabase.auth.getUser()
-    if (userErr) {
-      errorMsg = userErr.message
+    if (userErr || !userRes.user) {
+      errorMsg = 'Not signed in'
       loading = false
       return
     }
-
     const user = userRes.user
-    if (!user) {
-      errorMsg = 'Not signed in.'
-      loading = false
-      return
-    }
 
-    const start = startOfWeekMonday()
-    const end = endOfWeekSunday()
+    const start = new Date(week[0].dateKey + 'T00:00:00')
+    const end = new Date(week[6].dateKey + 'T23:59:59')
 
     const { data, error } = await supabase
       .from('moods')
@@ -91,37 +99,50 @@
       return
     }
 
-    const rows = (data ?? []) as MoodRow[]
+    console.log('WEEKLY QUERY', {
+  userId: user.id,
+  start: start.toISOString(),
+  end: end.toISOString(),
+  count: data?.length,
+  error
+})
 
-    // Fill the week by local date key (latest mood wins because we sorted desc)
-    const seen = new Set<string>()
-    for (const r of rows) {
-      const key = toISODateKey(new Date(r.created_at))
-      if (seen.has(key)) continue
-      const slot = week.find((x) => x.dateKey === key)
+    const filled = new Set<string>()
+    for (const row of data ?? []) {
+      const key = localDateKey(row.created_at)
+      if (filled.has(key)) continue
+
+      const mood = normalizeMood((row as any).mood)
+      if (!mood) continue // ignore unknown moods safely
+
+      const slot = week.find((d) => d.dateKey === key)
       if (slot) {
-        slot.mood = r.mood
-        seen.add(key)
+        slot.mood = mood
+        filled.add(key)
       }
     }
 
     loading = false
+
+    week = [...week]
   }
+
+  
 
   onMount(loadWeek)
 
-  // (Optional) expose a manual refresh API via prop
-  export let refreshToken: number = 0
-  $: if (refreshToken) loadWeek()
+  export let refreshToken = 0
+  let lastRefresh = 0
+  $: if (refreshToken !== lastRefresh) {
+    lastRefresh = refreshToken
+    loadWeek()
+  }
 </script>
 
 <div class="col-span-12 lg:col-span-6">
-  <div class="rounded-2xl bg-white/90 backdrop-blur border border-white/30 shadow-sm p-5">
-    <div class="flex items-start justify-between">
-      <div>
-        <p class="text-sm text-gray-500">This week</p>
-        <h2 class="text-lg font-semibold text-gray-900">Weekly Mood</h2>
-      </div>
+  <div class="rounded-2xl bg-white/90 backdrop-blur border border-white/30 p-5 shadow-sm">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold text-gray-900">Weekly Mood</h2>
       <button
         class="text-xs px-3 py-1 rounded-full bg-black/5 hover:bg-black/10"
         on:click={loadWeek}
@@ -132,41 +153,31 @@
     </div>
 
     {#if errorMsg}
-      <p class="mt-3 text-sm text-red-600">{errorMsg}</p>
+      <p class="text-sm text-red-600 mb-3">{errorMsg}</p>
     {/if}
 
-    <div class="mt-4 grid grid-cols-7 gap-2 text-center">
+    <div class="grid grid-cols-7 gap-2 text-center">
       {#each week as d}
         <div class="flex flex-col items-center gap-2">
-          <span class="text-[11px] text-gray-500">{d.day}</span>
+          <span class="text-xs text-gray-500">{d.label}</span>
 
           {#if d.mood}
             <div class={`w-10 h-10 rounded-xl flex items-center justify-center ${MOODS[d.mood].bg}`}>
               <span class="text-lg">{MOODS[d.mood].emoji}</span>
             </div>
           {:else}
-            <div class="w-10 h-10 rounded-xl bg-gray-100 border border-gray-200"></div>
+            <div class="w-10 h-10 rounded-xl border bg-gray-100"></div>
           {/if}
         </div>
       {/each}
     </div>
 
-    <div class="mt-4 flex flex-wrap gap-2 text-xs text-gray-600">
-      <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-gray-100 border">
-        😄 Happy
-      </span>
-      <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-gray-100 border">
-        🙂 Good
-      </span>
-      <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-gray-100 border">
-        😐 Neutral
-      </span>
-      <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-gray-100 border">
-        😕 Bad
-      </span>
-      <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-gray-100 border">
-        😢 Sad
-      </span>
+    <div class="mt-4 flex flex-wrap gap-3 text-xs text-gray-600">
+      <span>😄 Happy</span>
+      <span>🙂 Good</span>
+      <span>😐 Neutral</span>
+      <span>😕 Bad</span>
+      <span>😢 Sad</span>
     </div>
   </div>
 </div>
