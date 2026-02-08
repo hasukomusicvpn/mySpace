@@ -57,6 +57,7 @@
   }
 
   async function saveMood(mood: MoodKey) {
+    if (loading) return
     loading = true
     errorMsg = ''
 

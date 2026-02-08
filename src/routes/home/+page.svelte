@@ -5,6 +5,8 @@
   import WeeklyMoodCard from '$lib/components/WeeklyMoodCard.svelte';
   import Icon from "@iconify/svelte"
   import DailyMoodCheck from '$lib/components/DailyMoodCheck.svelte';
+  import TodoPreview from '$lib/components/TodoPreview.svelte'
+
 
   // DEFAULTS
   const DEFAULT_BANNER = '/galaxy-banner.jpg'
@@ -152,6 +154,9 @@
   <div class="mt-30 sm:mt-32 md:mt-30 lg:mt-30">
     <DailyMoodCheck on:saved={() => (moodRefresh += 1)} />
     <WeeklyMoodCard refreshToken={moodRefresh} />
+  </div>
+  <div>
+    <TodoPreview limit={4} />
   </div>
 </div>
 <!-- MODALS -->
